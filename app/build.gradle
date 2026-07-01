@@ -11,8 +11,8 @@ android {
         applicationId "com.arkpets.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 100
-        versionName "2.3.4"
+        versionCode 103
+        versionName "2.3.7"
     }
 
     buildTypes {

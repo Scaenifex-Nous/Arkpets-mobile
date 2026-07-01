@@ -140,7 +140,7 @@ class PetOverlayService : Service(), SensorEventListener {
     }
 
     private fun addTouchWindow() {
-        val tw = 200; val th = 320
+        val tw = 200; val th = 200
         touchView = object : android.view.View(this) {
             var downRawX = 0f; var downRawY = 0f
             var startPhysX = 0f; var startPhysY = 0f
@@ -311,8 +311,8 @@ class PetOverlayService : Service(), SensorEventListener {
                     // Position window so character body is roughly centered
                     val wx = (px - 100).toInt().coerceIn(0, (sw - 200).toInt())
                     // Center window on character midpoint
-                    val charMid = sh - py - p.bodyHeight / 2f
-                    val wy = (charMid - 160).toInt().coerceIn(0, (sh - 320).toInt())
+                    // Window from feet down — covers lower body, not above head
+                    val wy = (sh - py).toInt().coerceIn(0, (sh - 200).toInt())
                     handler.post {
                         try {
                             val tv = touchView ?: return@post

@@ -41,7 +41,8 @@ class SpineTextureView(
     var windowW = 500; var windowH = 700
     @Volatile var isDragging = false
     @Volatile var flingVx = 0f; @Volatile var flingVy = 0f
-    @Volatile var bodyHeight = 400f  // estimated character height in screen pixels
+    @Volatile var bodyHeight = 400f
+    @Volatile var footOfs = 200f  // exposed for window alignment
 
     private var renderThread: HandlerThread? = null
     private var handler: Handler? = null
@@ -264,6 +265,7 @@ class SpineTextureView(
         }
         footOffset = if (minY < Float.MAX_VALUE) -minY else 0f
         bodyHeight = if (minY < Float.MAX_VALUE) maxY - minY else 400f
+        footOfs = footOffset  // expose for touch window positioning
         glLog("Bounds: footOffset=${"%.0f".format(footOffset)} height=${"%.0f".format(bodyHeight)}")
         glLog("Bounds: minY=${"%.0f".format(minY)} footOffset=${"%.0f".format(footOffset)}")
 
