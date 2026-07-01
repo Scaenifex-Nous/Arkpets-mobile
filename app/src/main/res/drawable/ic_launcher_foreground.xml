@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background circle -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+
+    <!-- Pet character shape (stylized) -->
+    <path
+        android:fillColor="#FF4A90D9"
+        android:pathData="M54,30 C54,30 44,40 40,50 C36,60 38,70 38,70 C38,70 44,75 54,75 C64,75 70,70 70,70 C70,70 72,60 68,50 C64,40 54,30 54,30 Z" />
+
+    <!-- Eyes -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M47,52m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M61,52m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+
+    <!-- Pupils -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M49,52m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M63,52m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+
+    <!-- Smile -->
+    <path
+        android:fillColor="#FF000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M48,60 C52,65 56,65 60,60" />
+</vector>

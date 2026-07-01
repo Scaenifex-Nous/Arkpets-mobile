@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@color/background">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="ArkPets"
+            android:textSize="20sp"
+            android:textColor="@color/textPrimary"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/model_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textSize="11sp"
+            android:textColor="@color/textSecondary" />
+    </LinearLayout>
+
+    <!-- Search -->
+    <EditText
+        android:id="@+id/search_input"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="搜索角色..."
+        android:textColor="@color/textPrimary"
+        android:textColorHint="@color/textSecondary"
+        android:background="@drawable/spinner_background"
+        android:padding="14dp"
+        android:layout_marginBottom="4dp"
+        android:singleLine="true" />
+
+    <!-- Character list with fast scroll -->
+    <ListView
+        android:id="@+id/character_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/background"
+        android:divider="#FF222222"
+        android:dividerHeight="1dp"
+        android:fastScrollEnabled="true"
+        android:cacheColorHint="#00000000"
+        android:listSelector="#FF333333"
+        android:padding="0dp" />
+
+    <!-- Selected indicator -->
+    <TextView
+        android:id="@+id/selected_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="未选择"
+        android:textSize="13sp"
+        android:textColor="@color/textPrimary"
+        android:padding="8dp"
+        android:background="#FF111111" />
+
+    <!-- Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="8dp">
+
+        <!-- Toggles row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="重力"
+                android:textSize="12sp"
+                android:textColor="@color/textPrimary" />
+            <Switch
+                android:id="@+id/gravity_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="触摸"
+                android:textSize="12sp"
+                android:textColor="@color/textPrimary"
+                android:layout_marginStart="24dp" />
+            <Switch
+                android:id="@+id/touch_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/speed_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="行走速度: 350"
+            android:textSize="11sp"
+            android:textColor="@color/textSecondary" />
+        <SeekBar
+            android:id="@+id/speed_seekbar"
+            android:layout_width="match_parent"
+            android:layout_height="20dp"
+            android:max="300"
+            android:progress="175" />
+
+        <TextView
+            android:id="@+id/gravity_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="重力: 1.00x"
+            android:textSize="11sp"
+            android:textColor="@color/textSecondary" />
+        <SeekBar
+            android:id="@+id/gravity_seekbar"
+            android:layout_width="match_parent"
+            android:layout_height="20dp"
+            android:max="100"
+            android:progress="100" />
+
+        <TextView
+            android:id="@+id/status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="就绪"
+            android:textSize="11sp"
+            android:textColor="@color/textSecondary"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/start_button"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="启动"
+                android:textSize="13sp"
+                android:textColor="#FF000000"
+                app:backgroundTint="@color/accent"
+                android:layout_marginEnd="4dp"
+                app:cornerRadius="2dp" />
+
+            <Button
+                android:id="@+id/stop_button"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="停止"
+                android:textSize="13sp"
+                android:textColor="@color/textPrimary"
+                app:backgroundTint="#FF222222"
+                app:cornerRadius="2dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

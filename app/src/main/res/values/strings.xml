@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ArkPets</string>
+    <string name="select_character">选择角色</string>
+    <string name="start_pet">启动桌面宠物</string>
+    <string name="stop_pet">停止桌面宠物</string>
+    <string name="settings">设置</string>
+    <string name="no_characters">没有找到角色模型</string>
+    <string name="loading">加载中…</string>
+    <string name="pet_running">桌面宠物运行中</string>
+</resources>
