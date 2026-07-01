@@ -52,9 +52,6 @@ export ANDROID_HOME=/path/to/android/sdk
 - 手机倾斜 >2m/s² 时激活滑动/飞行
 - 关闭时纯自动行走模式
 
-## 模型来源
-
-模型文件来自 ArkPets Desktop（[isHarryh/ArkPets](https://github.com/isHarryh/ArkPets)），版权归原游戏及原作者所有。
 
 ## 许可
 
