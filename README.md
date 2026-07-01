@@ -19,7 +19,7 @@
 | 渲染 | TextureView + EGL14 + OpenGL ES 2.0 |
 | Spine | libGDX 1.12.1 + spine-libgdx 3.8.55 |
 | 骨骼绘制 | PolygonSpriteBatch + SkeletonRenderer |
-| 动画分类 | 正则模式匹配（参考 ArkPets Desktop `AnimClip.recognizeType`） |
+| 动画分类 | 模式匹配（参考 ArkPets ） |
 | 悬浮窗 | WindowManager TYPE_APPLICATION_OVERLAY |
 | 物理 | 独立线程 60fps 刚体模拟 |
 
