@@ -6,157 +6,202 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.arkpets.mobile.databinding.ActivityMainBinding
 import com.arkpets.mobile.model.CharacterData
+import com.arkpets.mobile.model.ModelAsset
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var charList: ListView
-    private lateinit var searchInput: EditText
-    private lateinit var startBtn: Button
-    private lateinit var stopBtn: Button
-    private lateinit var gravitySwitch: Switch
-    private lateinit var statusText: TextView
-    private lateinit var modelCount: TextView
-    private lateinit var selectedLabel: TextView
+    // ---- ViewBinding ----
+    private lateinit var binding: ActivityMainBinding
+
+    // ---- State ----
     private lateinit var prefs: SharedPreferences
+    private var allChars = listOf<ModelAsset>()
     private var allNames = listOf<String>()
     private var filteredIndices = listOf<Int>()
-    private var allChars = listOf<com.arkpets.mobile.model.ModelAsset>()
     private var selectedIndex = -1
+
+    // ---- Adapter (reused) ----
+    private var listAdapter: ArrayAdapter<String>? = null
+
+    // ---- Search debounce ----
+    private val searchHandler = Handler(Looper.getMainLooper())
+    private var searchRunnable: Runnable? = null
+
+    // ========================================================================
+    // Lifecycle
+    // ========================================================================
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        prefs = getSharedPreferences("arkpets", MODE_PRIVATE)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        charList = findViewById(R.id.character_list)
-        searchInput = findViewById(R.id.search_input)
-        startBtn = findViewById(R.id.start_button)
-        stopBtn = findViewById(R.id.stop_button)
-        gravitySwitch = findViewById(R.id.gravity_switch)
-        statusText = findViewById(R.id.status_text)
-        modelCount = findViewById(R.id.model_count)
-        selectedLabel = findViewById(R.id.selected_label)
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        initUI()
+        loadCharactersAsync()
+    }
 
-        startBtn.isEnabled = false
-        statusText.text = "Loading..."
-        Thread {
-            loadCharacters()
-            runOnUiThread {
-                allChars = CharacterData.characters.toList()
-                allNames = allChars.map { it.displayName }
-                filteredIndices = allNames.indices.toList()
-                updateList()
-                startBtn.isEnabled = CharacterData.characters.isNotEmpty()
-                modelCount.text = "${CharacterData.characters.size}"
-                statusText.text = if (CharacterData.characters.isNotEmpty()) "就绪" else "无数据"
+    // ========================================================================
+    // Character loading (coroutine, off main thread)
+    // ========================================================================
+
+    private fun loadCharactersAsync() {
+        lifecycleScope.launch {
+            binding.statusText.text = getString(R.string.loading)
+            binding.startButton.isEnabled = false
+
+            val loaded = withContext(Dispatchers.IO) {
+                CharacterData.loadFromAssets(this@MainActivity)
             }
-        }.start()
 
-        gravitySwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean("gravity", checked).apply()
+            allChars = loaded
+            allNames = loaded.map { it.displayName }
+            filteredIndices = allNames.indices.toList()
+            updateList()
+
+            binding.startButton.isEnabled = allChars.isNotEmpty()
+            binding.modelCount.text = allChars.size.toString()
+            binding.statusText.text = if (allChars.isNotEmpty())
+                getString(R.string.ready) else getString(R.string.no_data)
+        }
+    }
+
+    // ========================================================================
+    // UI Initialization
+    // ========================================================================
+
+    private fun initUI() {
+        // ---- Gravity / Touch toggles ----
+        binding.gravitySwitch.isChecked = prefs.getBoolean(KEY_GRAVITY, true)
+        binding.gravitySwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(KEY_GRAVITY, checked).apply()
+        }
+        binding.touchSwitch.isChecked = prefs.getBoolean(KEY_TOUCH, true)
+        binding.touchSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(KEY_TOUCH, checked).apply()
+        }
+        binding.flightSwitch.isChecked = false  // always start OFF
+        prefs.edit().putBoolean(KEY_FLIGHT, false).apply()  // force save OFF state
+        binding.flightSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(KEY_FLIGHT, checked).apply()
+            if (checked) {
+                // Save gravity state, force switch OFF + slider 0, disable both
+                prefs.edit().putInt(KEY_GRAVITY_SAVED, binding.gravitySeekbar.progress).apply()
+                prefs.edit().putBoolean(KEY_GRAVITY_SAVED_SW, binding.gravitySwitch.isChecked).apply()
+                binding.gravitySwitch.isChecked = false
+                binding.gravitySwitch.isEnabled = false
+                binding.gravitySeekbar.progress = 0
+                binding.gravitySeekbar.isEnabled = false
+                binding.gravityLabel.text = getString(R.string.gravity_scale, 0f)
+                prefs.edit().putInt(KEY_GRAVITY_PROGRESS, 0).putFloat(KEY_GRAVITY_SCALE, 0f)
+                    .putBoolean(KEY_GRAVITY, false).apply()
+            } else {
+                // Restore gravity state, re-enable both
+                val saved = prefs.getInt(KEY_GRAVITY_SAVED, DEFAULT_GRAVITY_PROGRESS)
+                val savedSw = prefs.getBoolean(KEY_GRAVITY_SAVED_SW, true)
+                binding.gravitySwitch.isChecked = savedSw
+                binding.gravitySwitch.isEnabled = true
+                binding.gravitySeekbar.progress = saved
+                binding.gravitySeekbar.isEnabled = true
+                binding.gravityLabel.text = getString(R.string.gravity_scale, saved / 100f)
+                prefs.edit().putInt(KEY_GRAVITY_PROGRESS, saved).putFloat(KEY_GRAVITY_SCALE, saved / 100f)
+                    .putBoolean(KEY_GRAVITY, savedSw).apply()
+            }
         }
 
-        val touchSwitch = findViewById<Switch>(R.id.touch_switch)
-        touchSwitch.isChecked = prefs.getBoolean("touchEnabled", true)
-        touchSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean("touchEnabled", checked).apply()
-        }
-
-        // Search filter
-        searchInput.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) {
-                filterList(s?.toString() ?: "")
+        // ---- Search with debounce ----
+        binding.searchInput.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                scheduleFilter(s?.toString() ?: "")
             }
             override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
             override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
         })
 
-        charList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
-            selectedIndex = if (pos in filteredIndices.indices) filteredIndices[pos] else -1
+        // ---- Character list selection ----
+        binding.characterList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
+            selectedIndex = filteredIndices.getOrElse(pos) { -1 }
             if (selectedIndex >= 0 && selectedIndex < allChars.size) {
-                selectedLabel.text = "已选: ${allChars[selectedIndex].displayName}"
+                binding.selectedLabel.text = getString(R.string.selected, allChars[selectedIndex].displayName)
             }
-            updateList() // refresh to show highlight
+            updateList() // refresh highlighting
         }
 
-        startBtn.setOnClickListener {
-            if (selectedIndex < 0 || selectedIndex >= CharacterData.characters.size) {
-                Toast.makeText(this, "请先选择角色", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-            } else {
-                startOverlay()
-            }
-        }
+        // ---- Start / Stop buttons ----
+        binding.startButton.setOnClickListener { onStartClicked() }
+        binding.stopButton.setOnClickListener { onStopClicked() }
 
-        stopBtn.setOnClickListener {
-            stopService(Intent(this, PetOverlayService::class.java))
-            statusText.text = "已停止"
-        }
+        // ---- Speed slider ----
+        binding.speedSeekbar.progress = prefs.getInt(KEY_SPEED_PROGRESS, DEFAULT_SPEED_PROGRESS)
+        binding.speedLabel.text = getString(R.string.walk_speed, binding.speedSeekbar.progress * 2)
+        binding.speedSeekbar.setOnSeekBarChangeListener(
+            createSeekBarListener { progress ->
+                prefs.edit()
+                    .putInt(KEY_SPEED_PROGRESS, progress)
+                    .putFloat(KEY_WALK_SPEED, progress.toFloat() * 2f)
+                    .apply()
+                binding.speedLabel.text = getString(R.string.walk_speed, progress * 2)
+            }
+        )
 
-        // Speed & gravity sliders
-        val speedBar = findViewById<SeekBar>(R.id.speed_seekbar)
-        val gravityBar = findViewById<SeekBar>(R.id.gravity_seekbar)
-        val speedLabel = findViewById<TextView>(R.id.speed_label)
-        val gravityLabel = findViewById<TextView>(R.id.gravity_label)
-        speedBar.progress = prefs.getInt("speedProgress", 175)
-        gravityBar.progress = prefs.getInt("gravityProgress", 100)
-        speedLabel.text = "行走速度: ${speedBar.progress * 2}"
-        gravityLabel.text = "重力: " + "%.2f".format(gravityBar.progress / 100f) + "x"
-        speedBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                prefs.edit().putInt("speedProgress", p).putFloat("walkSpeed", p.toFloat() * 2f).apply()
-                speedLabel.text = "行走速度: ${p * 2}"
+        // ---- Gravity slider ----
+        binding.gravitySeekbar.progress = prefs.getInt(KEY_GRAVITY_PROGRESS, DEFAULT_GRAVITY_PROGRESS)
+        binding.gravityLabel.text = getString(R.string.gravity_scale, binding.gravitySeekbar.progress / 100f)
+        binding.gravitySeekbar.setOnSeekBarChangeListener(
+            createSeekBarListener { progress ->
+                prefs.edit()
+                    .putInt(KEY_GRAVITY_PROGRESS, progress)
+                    .putFloat(KEY_GRAVITY_SCALE, progress / 100f)
+                    .apply()
+                binding.gravityLabel.text = getString(R.string.gravity_scale, progress / 100f)
             }
-            override fun onStartTrackingTouch(s: SeekBar?) {}
-            override fun onStopTrackingTouch(s: SeekBar?) {}
-        })
-        gravityBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                prefs.edit().putInt("gravityProgress", p).putFloat("gravityScale", p / 100f).apply()
-                gravityLabel.text = "重力: " + "%.2f".format(p / 100f) + "x"
-            }
-            override fun onStartTrackingTouch(s: SeekBar?) {}
-            override fun onStopTrackingTouch(s: SeekBar?) {}
-        })
+        )
     }
 
-    private fun loadCharacters() {
-        try { CharacterData.loadFromAssets(this) } catch (e: Exception) { android.util.Log.e("ArkPets", "load failed", e) }
+    // ========================================================================
+    // Search with 300ms debounce
+    // ========================================================================
+
+    private fun scheduleFilter(query: String) {
+        searchRunnable?.let { searchHandler.removeCallbacks(it) }
+        searchRunnable = Runnable { filterList(query) }
+        searchHandler.postDelayed(searchRunnable!!, SEARCH_DEBOUNCE_MS)
     }
 
     private fun filterList(query: String) {
-        filteredIndices = allNames.indices.filter {
-            query.isEmpty() || allNames[it].contains(query, ignoreCase = true)
+        filteredIndices = if (query.isEmpty()) {
+            allNames.indices.toList()
+        } else {
+            allNames.indices.filter { idx ->
+                allNames[idx].contains(query, ignoreCase = true)
+            }
         }
         updateList()
     }
 
-    private var listAdapter: ArrayAdapter<String>? = null
+    // ========================================================================
+    // List management
+    // ========================================================================
 
     private fun updateList() {
         val names = filteredIndices.map { allNames[it] }
         if (listAdapter == null) {
-            listAdapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, names) {
-                override fun getView(pos: Int, v: android.view.View?, parent: android.view.ViewGroup): android.view.View {
-                    val view = super.getView(pos, v, parent) as TextView
-                    val idx = filteredIndices.getOrNull(pos)
-                    val isSelected = idx != null && idx == selectedIndex
-                    view.setTextColor(0xFFFFFFFF.toInt())
-                    view.setBackgroundColor(if (isSelected) 0xFF444444.toInt() else 0xFF000000.toInt())
-                    view.textSize = 14f
-                    view.setPadding(12, 12, 12, 12)
-                    return view
-                }
-            }
-            charList.adapter = listAdapter
+            listAdapter = CharacterListAdapter(names)
+            binding.characterList.adapter = listAdapter
         } else {
             listAdapter!!.clear()
             listAdapter!!.addAll(names)
@@ -164,13 +209,97 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Custom adapter with selected-item highlighting */
+    private inner class CharacterListAdapter(items: List<String>) :
+        ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_list_item_1, items) {
+
+        override fun getView(pos: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
+            val view = super.getView(pos, convertView, parent) as TextView
+            val idx = filteredIndices.getOrNull(pos)
+            val isSelected = idx != null && idx == selectedIndex
+
+            view.setTextColor(TEXT_COLOR)
+            view.setBackgroundColor(if (isSelected) SELECTED_BG else UNSELECTED_BG)
+            view.textSize = TEXT_SIZE
+            view.setPadding(PADDING, PADDING, PADDING, PADDING)
+            return view
+        }
+    }
+
+    // ========================================================================
+    // Actions
+    // ========================================================================
+
+    private fun onStartClicked() {
+        if (selectedIndex < 0 || selectedIndex >= allChars.size) {
+            Toast.makeText(this, R.string.select_first, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } else {
+            startOverlay()
+        }
+    }
+
+    private fun onStopClicked() {
+        stopService(Intent(this, PetOverlayService::class.java))
+        binding.statusText.text = getString(R.string.stopped)
+    }
+
     private fun startOverlay() {
         if (selectedIndex < 0) return
-        prefs.edit().putBoolean("gravity", gravitySwitch.isChecked).apply()
+        prefs.edit().putBoolean(KEY_GRAVITY, binding.gravitySwitch.isChecked).apply()
+
         val intent = Intent(this, PetOverlayService::class.java).apply {
             putExtra(PetOverlayService.EXTRA_CHARACTER_INDEX, selectedIndex)
         }
         ContextCompat.startForegroundService(this, intent)
-        statusText.text = "悬浮窗已启动"
+        binding.statusText.text = getString(R.string.overlay_started)
+    }
+
+    // ========================================================================
+    // Utility
+    // ========================================================================
+
+    private fun createSeekBarListener(onChanged: (Int) -> Unit) =
+        object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                onChanged(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        }
+
+    // ========================================================================
+    // Constants
+    // ========================================================================
+
+    companion object {
+        private const val PREFS_NAME = "arkpets"
+        private const val KEY_GRAVITY = "gravity"
+        private const val KEY_TOUCH = "touchEnabled"
+        private const val KEY_FLIGHT = "flightMode"
+        private const val KEY_SPEED_PROGRESS = "speedProgress"
+        private const val KEY_WALK_SPEED = "walkSpeed"
+        private const val KEY_GRAVITY_PROGRESS = "gravityProgress"
+        private const val KEY_GRAVITY_SCALE = "gravityScale"
+        private const val KEY_GRAVITY_SAVED = "gravitySaved"
+        private const val KEY_GRAVITY_SAVED_SW = "gravitySavedSw"
+
+        private const val DEFAULT_SPEED_PROGRESS = 175
+        private const val DEFAULT_GRAVITY_PROGRESS = 100
+        private const val SEARCH_DEBOUNCE_MS = 300L
+
+        private const val TEXT_COLOR = 0xFFFFFFFF.toInt()
+        private const val SELECTED_BG = 0xFF444444.toInt()
+        private const val UNSELECTED_BG = 0xFF000000.toInt()
+        private const val TEXT_SIZE = 14f
+        private const val PADDING = 12
     }
 }

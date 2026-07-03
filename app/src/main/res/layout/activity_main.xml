@@ -101,12 +101,24 @@
                 android:text="触摸"
                 android:textSize="12sp"
                 android:textColor="@color/textPrimary"
-                android:layout_marginStart="24dp" />
+                android:layout_marginStart="16dp" />
             <Switch
                 android:id="@+id/touch_switch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checked="true" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="飞行"
+                android:textSize="12sp"
+                android:textColor="@color/textPrimary"
+                android:layout_marginStart="16dp" />
+            <Switch
+                android:id="@+id/flight_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="false" />
         </LinearLayout>
 
         <TextView

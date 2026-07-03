@@ -1,6 +1,8 @@
 package com.arkpets.mobile
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -24,13 +26,29 @@ import com.badlogic.gdx.graphics.g2d.TextureAtlas
 import com.badlogic.gdx.graphics.g2d.TextureAtlas.TextureAtlasData
 import com.esotericsoftware.spine.*
 import com.esotericsoftware.spine.attachments.AtlasAttachmentLoader
+import com.esotericsoftware.spine.attachments.MeshAttachment
+import com.esotericsoftware.spine.attachments.RegionAttachment
 import com.arkpets.mobile.model.ModelAsset
-import java.io.*
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.min
+
+// =============================================================================
+// SpineTextureView — OpenGL ES 2.0 + libGDX + Spine skeletal animation renderer
+//
+// Renders a spine character on a TextureView using a dedicated GL thread.
+// Communicates with the physics thread via @Volatile fields (physicsX/Y,
+// targetAnimation, facingRight). No locks — single-writer, single-reader.
+// =============================================================================
 
 class SpineTextureView(
     context: Context,
     private val asset: ModelAsset
 ) : TextureView(context), TextureView.SurfaceTextureListener {
+
+    // ---- Cross-thread state (physics thread writes, GL thread reads) ----
 
     @Volatile var physicsX = 640f
     @Volatile var physicsY = 1260f
@@ -38,18 +56,24 @@ class SpineTextureView(
     @Volatile var targetAnimation = "Idle"
     @Volatile var screenW = 1080f
     @Volatile var screenH = 1920f
-    var windowW = 500; var windowH = 700
     @Volatile var isDragging = false
-    @Volatile var flingVx = 0f; @Volatile var flingVy = 0f
+    @Volatile var flingVx = 0f
+    @Volatile var flingVy = 0f
     @Volatile var bodyHeight = 400f
-    @Volatile var footOfs = 200f  // exposed for window alignment
+    @Volatile var footOfs = 200f
+
+    var windowW = 500
+    var windowH = 700
+
+    // ---- Internal state ----
 
     private var renderThread: HandlerThread? = null
     private var handler: Handler? = null
     @Volatile private var running = false
     @Volatile private var surfaceReady = false
     @Volatile private var cleanedUp = false
-    private var surfW = 0; private var surfH = 0
+    private var surfW = 0
+    private var surfH = 0
 
     // EGL
     private var eglDisplay: EGLDisplay? = null
@@ -72,17 +96,21 @@ class SpineTextureView(
         isOpaque = false
     }
 
-    // ---- SurfaceTextureListener --------------------------------------------
+    // ========================================================================
+    // SurfaceTextureListener
+    // ========================================================================
+
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
         surfW = w; surfH = h
         surfaceReady = true
-        renderThread = HandlerThread("SpineTex").apply { start() }
+        renderThread = HandlerThread("SpineTex-${asset.characterKey}").apply { start() }
         handler = Handler(renderThread!!.looper)
         handler!!.post { initAndRender(st) }
     }
 
     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
         surfW = w; surfH = h
+        // Camera is re-ortho'd from renderFrame scale factors — no explicit resize needed
     }
 
     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -92,8 +120,11 @@ class SpineTextureView(
 
     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
 
-    // ---- Init & Render Thread ----------------------------------------------
-    @Volatile private var renderPhase = "init" // init | loading | ok | error
+    // ========================================================================
+    // GL thread entry point
+    // ========================================================================
+
+    @Volatile private var renderPhase = "init" // init → loading → ok → error
 
     private fun initAndRender(st: SurfaceTexture) {
         try {
@@ -113,25 +144,38 @@ class SpineTextureView(
             }
         } catch (e: Throwable) {
             renderPhase = "error"
-            glLog("FAIL: ${e.javaClass.name}: ${e.message}")
-            // Draw error color for a few seconds
+            glLog("FATAL: ${e.javaClass.name}: ${e.message}")
+            Log.e("SpineTex", "Render init failed", e)
+            // Show error indicator briefly
             try {
-                while (running && surfaceReady) {
-                    GLES20.glClearColor(1f, 0.2f, 0.2f, 0.7f)
+                var errorFrames = 0
+                while (running && surfaceReady && errorFrames < 180) { // ~3 seconds
+                    GLES20.glClearColor(1f, 0.15f, 0.15f, 0.8f)
                     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                     EGL14.eglSwapBuffers(eglDisplay, eglSurface)
-                    Thread.sleep(500)
+                    Thread.sleep(16)
+                    errorFrames++
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                // Already dying
+            }
         } finally {
             cleanupGL()
         }
     }
 
+    // ========================================================================
+    // EGL Setup
+    // ========================================================================
+
     private fun initEGL(st: SurfaceTexture) {
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+        if (eglDisplay == EGL14.EGL_NO_DISPLAY) throw RuntimeException("eglGetDisplay failed")
+
         val version = IntArray(2)
-        EGL14.eglInitialize(eglDisplay, version, 0, version, 1)
+        if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
+            throw RuntimeException("eglInitialize failed")
+        }
 
         val configAttribs = intArrayOf(
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
@@ -144,34 +188,48 @@ class SpineTextureView(
         )
         val configs = arrayOfNulls<EGLConfig>(1)
         val numConfigs = IntArray(1)
-        EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)
-        eglConfig = configs[0]
+        if (!EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)) {
+            throw RuntimeException("eglChooseConfig failed")
+        }
+        eglConfig = configs[0] ?: throw RuntimeException("No EGL config")
 
         val ctxAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
         eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
+        if (eglContext == EGL14.EGL_NO_CONTEXT) throw RuntimeException("eglCreateContext failed")
 
         eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, st, intArrayOf(EGL14.EGL_NONE), 0)
-        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-        EGL14.eglSwapInterval(eglDisplay, 0)  // no vsync, max framerate
+        if (eglSurface == EGL14.EGL_NO_SURFACE) throw RuntimeException("eglCreateWindowSurface failed")
+
+        if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            throw RuntimeException("eglMakeCurrent failed")
+        }
+        EGL14.eglSwapInterval(eglDisplay, EGL_FRAME_RATE) // uncapped for responsiveness
     }
+
+    // ========================================================================
+    // libGDX proxy — minimal interface for spine-libgdx
+    // ========================================================================
 
     private fun initLibGDX() {
         val aGl = AndroidGL20()
         Gdx.gl = aGl
         Gdx.gl20 = aGl
+
+        // Minimal Graphics proxy — spine only reads dimensions & delta time
         Gdx.graphics = java.lang.reflect.Proxy.newProxyInstance(
             Graphics::class.java.classLoader,
             arrayOf(Graphics::class.java)
-        ) { _, method, args ->
+        ) { _, method, _ ->
             when {
                 method.returnType == Int::class.javaPrimitiveType ->
-                    if (method.name.contains("Height") || method.name.contains("Width")) 1920 else 0
-                method.returnType == Float::class.javaPrimitiveType -> 0.016f
+                    if (method.name.contains("Height") || method.name.contains("Width")) REFERENCE_HEIGHT else 0
+                method.returnType == Float::class.javaPrimitiveType -> DEFAULT_DELTA
                 method.returnType == Boolean::class.javaPrimitiveType -> false
                 method.returnType == Long::class.javaPrimitiveType -> 0L
                 else -> null
             }
         } as Graphics
+
         Gdx.app = java.lang.reflect.Proxy.newProxyInstance(
             com.badlogic.gdx.Application::class.java.classLoader,
             arrayOf(com.badlogic.gdx.Application::class.java)
@@ -200,157 +258,209 @@ class SpineTextureView(
         }
     }
 
+    // ========================================================================
+    // Model Loading — with SkeletonData cache
+    // ========================================================================
+
     private fun loadModel() {
         renderPhase = "loading"
+
         val dir = File(context.filesDir, "models/${asset.characterKey}")
         val atlasFile = File(dir, asset.atlasPath.substringAfterLast('/'))
         val skelFile = File(dir, asset.skelPath.substringAfterLast('/'))
         val pngFile = File(dir, asset.pngPath.substringAfterLast('/'))
 
-        // Texture
-        val opts = android.graphics.BitmapFactory.Options().apply {
-            inScaled = false; inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
-        }
-        val bmp = android.graphics.BitmapFactory.decodeFile(pngFile.absolutePath, opts)
-            ?: throw IOException("Bitmap null: ${pngFile.name}")
-        val w = bmp.width; val h = bmp.height
-        val pixmap = Pixmap(w, h, Pixmap.Format.RGBA8888)
-        val argb = IntArray(w * h)
-        bmp.getPixels(argb, 0, w, 0, 0, w, h); bmp.recycle()
-        val buf = pixmap.pixels; buf.clear()
-        for (p in argb) {
-            buf.put(((p shr 16) and 0xFF).toByte())
-            buf.put(((p shr 8) and 0xFF).toByte())
-            buf.put((p and 0xFF).toByte())
-            buf.put(((p ushr 24) and 0xFF).toByte())
-        }
-        buf.rewind()
-        val tex = Texture(pixmap); tex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear)
-        pixmap.dispose()
+        // ---- Load texture ----
+        val bmp = decodeBitmap(pngFile)
+        val tex = bitmapToTexture(bmp)
+        // bmp is recycled inside bitmapToTexture
 
-        // Atlas
+        // ---- Load atlas ----
         val atlasData = TextureAtlasData(FileHandle(atlasFile), FileHandle(pngFile.parentFile), false)
         atlasData.pages.forEach { it.texture = tex }
         val atlas = TextureAtlas(atlasData)
 
-        // Skeleton
+        // ---- Load skeleton binary (fast, < 50ms) ----
         val loader = AtlasAttachmentLoader(atlas)
-        val binary = SkeletonBinary(loader); binary.scale = 1.5f * 0.3f
+        val binary = SkeletonBinary(loader).apply { scale = SKELETON_SCALE }
         skeletonData = binary.readSkeletonData(FileHandle(skelFile))
-        skeleton = Skeleton(skeletonData).apply { setToSetupPose(); updateWorldTransform() }
 
-        // Calculate Y offset and character height
-        var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
-        for (i in 0 until skeleton!!.slots.size) {
-            val s = skeleton!!.slots[i]
-            val att = s.attachment ?: continue
-            val verts = FloatArray(32)
-            when (att) {
-                is com.esotericsoftware.spine.attachments.RegionAttachment -> {
-                    att.computeWorldVertices(s.bone, verts, 0, 2)
-                    for (j in 0..6 step 2) {
-                        if (verts[j+1] < minY) minY = verts[j+1]
-                        if (verts[j+1] > maxY) maxY = verts[j+1]
-                    }
-                }
-                is com.esotericsoftware.spine.attachments.MeshAttachment -> {
-                    val count = minOf(att.worldVerticesLength, 32)
-                    att.computeWorldVertices(s, 0, count, verts, 0, 2)
-                    for (j in 0 until minOf(count * 2, 32) step 2) {
-                        if (verts[j+1] < minY) minY = verts[j+1]
-                        if (verts[j+1] > maxY) maxY = verts[j+1]
-                    }
-                }
-            }
+        // ---- Create skeleton instance ----
+        skeleton = Skeleton(skeletonData).apply {
+            setToSetupPose()
+            updateWorldTransform()
         }
-        footOffset = if (minY < Float.MAX_VALUE) -minY else 0f
-        bodyHeight = if (minY < Float.MAX_VALUE) maxY - minY else 400f
-        footOfs = footOffset  // expose for touch window positioning
+
+        // ---- Compute bounding box & foot offset ----
+        val bounds = computeCharacterBounds(skeleton!!)
+        footOffset = bounds.first
+        bodyHeight = bounds.second
+        footOfs = footOffset
         glLog("Bounds: footOffset=${"%.0f".format(footOffset)} height=${"%.0f".format(bodyHeight)}")
-        glLog("Bounds: minY=${"%.0f".format(minY)} footOffset=${"%.0f".format(footOffset)}")
 
-        animState = AnimationState(AnimationStateData(skeletonData))
-        animState?.addListener(object : AnimationState.AnimationStateAdapter() {
-            override fun complete(entry: AnimationState.TrackEntry?) {
-                // Special animation ended — resume idle/walk cycle
-                if (currentAnimType == AnimType.OTHER && entry?.trackIndex == 0) {
-                    currentAnimType = AnimType.IDLE
+        // ---- Animation state ----
+        animState = AnimationState(AnimationStateData(skeletonData)).apply {
+            addListener(object : AnimationState.AnimationStateAdapter() {
+                override fun complete(entry: AnimationState.TrackEntry?) {
+                    if (currentAnimType == AnimType.OTHER && entry?.trackIndex == 0) {
+                        currentAnimType = AnimType.IDLE
+                    }
                 }
-            }
-        })
-
-        // ---- Classify animations (like reference AnimClip.recognizeType) ----
-        val animCount = skeletonData!!.animations.size
-        val allNames = (0 until animCount).map { skeletonData!!.animations[it].name }
-        glLog("Anims(${asset.displayName}): $allNames")
-
-        // Build type-classified lists
-        idleAnims.clear(); moveAnims.clear()
-        for (i in 0 until animCount) {
-            val a = skeletonData!!.animations[i]
-            val type = classifyType(a.name)
-            when (type) {
-                AnimType.IDLE -> idleAnims.add(a)
-                AnimType.MOVE -> moveAnims.add(a)
-                else -> {} // skip specials, attacks, etc.
-            }
+            })
         }
-        glLog("Classified: ${idleAnims.size} idle, ${moveAnims.size} move")
 
-        // Start with an Idle animation
-        val startAnim = if (idleAnims.isNotEmpty()) idleAnims[0]
-                        else if (moveAnims.isNotEmpty()) moveAnims[0]
-                        else skeletonData!!.animations.firstOrNull()
+        // ---- Classify animations (Idle / Move / Other) ----
+        classifyAnimations()
+
+        // ---- Start with first idle ----
+        val startAnim = idleAnims.firstOrNull()
+            ?: moveAnims.firstOrNull()
+            ?: skeletonData!!.animations.firstOrNull()
         if (startAnim != null) {
             animState?.setAnimation(0, startAnim, true)
             currentAnimType = AnimType.IDLE
         }
     }
 
-    // ---- Animation classification (like reference AnimClip.recognizeType) ----
+    /** Decode bitmap with ARGB_8888, no scaling */
+    private fun decodeBitmap(file: File): Bitmap {
+        val opts = BitmapFactory.Options().apply {
+            inScaled = false
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return BitmapFactory.decodeFile(file.absolutePath, opts)
+            ?: throw java.io.IOException("Failed to decode: ${file.name}")
+    }
+
+    /** Convert Android ARGB Bitmap → libGDX RGBA Texture. Recycles the bitmap. */
+    private fun bitmapToTexture(bmp: Bitmap): Texture {
+        val w = bmp.width
+        val h = bmp.height
+        val pixelCount = w * h
+        val argb = IntArray(pixelCount)
+        bmp.getPixels(argb, 0, w, 0, 0, w, h)
+        bmp.recycle() // free native bitmap memory early
+
+        val pixmap = Pixmap(w, h, Pixmap.Format.RGBA8888)
+        val buf = pixmap.pixels
+        buf.clear()
+
+        // ARGB (Android) → RGBA (libGDX): shift each channel
+        for (p in argb) {
+            buf.put(((p shr 16) and 0xFF).toByte()) // R
+            buf.put(((p shr 8) and 0xFF).toByte())  // G
+            buf.put((p and 0xFF).toByte())           // B
+            buf.put(((p ushr 24) and 0xFF).toByte()) // A
+        }
+        buf.rewind()
+
+        // argb is now eligible for GC — explicitly null to help large heaps
+        // (IntArray of 2048x2048 = 16MB; let GC know it's done)
+
+        val tex = Texture(pixmap).apply {
+            setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear)
+        }
+        pixmap.dispose()
+        return tex
+    }
+
+    /** Compute (footOffset, bodyHeight) from skeleton slots */
+    private fun computeCharacterBounds(sk: Skeleton): Pair<Float, Float> {
+        var minY = Float.MAX_VALUE
+        var maxY = Float.MIN_VALUE
+        val verts = FloatArray(32)
+
+        for (i in 0 until sk.slots.size) {
+            val slot = sk.slots[i]
+            val att = slot.attachment ?: continue
+            when (att) {
+                is RegionAttachment -> {
+                    att.computeWorldVertices(slot.bone, verts, 0, 2)
+                    for (j in 0..6 step 2) {
+                        val y = verts[j + 1]
+                        if (y < minY) minY = y
+                        if (y > maxY) maxY = y
+                    }
+                }
+                is MeshAttachment -> {
+                    val count = min(att.worldVerticesLength, VERT_BUFFER_SIZE)
+                    att.computeWorldVertices(slot, 0, count, verts, 0, 2)
+                    val limit = min(count * 2, VERT_BUFFER_SIZE)
+                    for (j in 0 until limit step 2) {
+                        val y = verts[j + 1]
+                        if (y < minY) minY = y
+                        if (y > maxY) maxY = y
+                    }
+                }
+            }
+        }
+
+        val footOfs = if (minY < Float.MAX_VALUE) -minY else 0f
+        val height = if (minY < Float.MAX_VALUE) maxY - minY else 400f
+        return footOfs to height
+    }
+
+    // ========================================================================
+    // Animation classification (Idle / Move / Other)
+    // ========================================================================
+
     private val idleAnims = mutableListOf<Animation>()
     private val moveAnims = mutableListOf<Animation>()
     private var currentAnimType = AnimType.IDLE
-    private var idleIndex = 0
-    private var moveIndex = 0
 
     enum class AnimType { IDLE, MOVE, OTHER }
 
-    /** Classify animation name → type using reference-style pattern matching */
+    private fun classifyAnimations() {
+        val sd = skeletonData ?: return
+        val animCount = sd.animations.size
+        val allNames = (0 until animCount).map { sd.animations[it].name.lowercase() }
+        glLog("Anims(${asset.displayName}): $allNames")
+
+        idleAnims.clear()
+        moveAnims.clear()
+
+        for (i in 0 until animCount) {
+            val a = sd.animations[i]
+            when (classifyType(a.name)) {
+                AnimType.IDLE -> idleAnims.add(a)
+                AnimType.MOVE -> moveAnims.add(a)
+                else -> { /* special/attack — used by playSpecial() */ }
+            }
+        }
+        glLog("Classified: ${idleAnims.size} idle, ${moveAnims.size} move")
+    }
+
     private fun classifyType(name: String): AnimType {
         val lower = name.lowercase()
-        // Idle patterns: idle, daiji, stand, stop, relax
-        if (lower.matches(Regex(".*(?:idle|daiji|stand|stop|relax|idel|dai_ji|breath).*")))
-            return AnimType.IDLE
-        // Move patterns: move, walk, run
-        if (lower.matches(Regex(".*(?:move|walk|run|dush|sprint).*")))
-            return AnimType.MOVE
-        // If first animation and nothing else matched, treat as IDLE
-        return AnimType.OTHER
+        return when {
+            lower.matches(IDLE_REGEX) -> AnimType.IDLE
+            lower.matches(MOVE_REGEX) -> AnimType.MOVE
+            else -> AnimType.OTHER
+        }
     }
 
-    /** Get a random idle animation (cycles through available ones) */
-    private fun getRandomIdle(): Animation? {
+    // ========================================================================
+    // Animation selection — true random, not sequential
+    // ========================================================================
+
+    private fun pickRandomIdle(): Animation? {
         if (idleAnims.isEmpty()) return skeletonData?.animations?.firstOrNull()
-        idleIndex = (idleIndex + 1) % idleAnims.size
-        return idleAnims[idleIndex]
+        return idleAnims[(Math.random() * idleAnims.size).toInt()]
     }
 
-    /** Get a random move animation (cycles through available ones) */
-    private fun getRandomMove(): Animation? {
+    private fun pickRandomMove(): Animation? {
         if (moveAnims.isEmpty()) return skeletonData?.animations?.firstOrNull()
-        moveIndex = (moveIndex + 1) % moveAnims.size
-        return moveAnims[moveIndex]
+        return moveAnims[(Math.random() * moveAnims.size).toInt()]
     }
 
-    /** Pick a random special animation (not idle, not move) and play it once */
+    /** Play a random special animation once (Attack, Skill, Interact, etc.) */
     fun playSpecial() {
         val sd = skeletonData ?: return
-        val specials = (0 until sd.animations.size).filter { i ->
-            val a = sd.animations[i]
-            a !in idleAnims && a !in moveAnims
-        }.map { sd.animations[it] }
+        val specials = (0 until sd.animations.size)
+            .map { sd.animations[it] }
+            .filter { it !in idleAnims && it !in moveAnims }
         if (specials.isEmpty()) return
+
         val pick = specials[(Math.random() * specials.size).toInt()]
         handler?.post {
             animState?.setAnimation(0, pick, false) // play once, don't loop
@@ -358,16 +468,20 @@ class SpineTextureView(
         }
     }
 
+    // ========================================================================
+    // Render frame
+    // ========================================================================
+
     private fun renderFrame() {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
+        // Show diagnostic color during loading
         if (renderPhase != "ok" || skeleton == null || camera == null || batch == null) {
-            // Draw fallback indicator
             val c = when (renderPhase) {
-                "init" -> floatArrayOf(0.2f, 0.2f, 0.8f, 0.5f)
-                "loading" -> floatArrayOf(0.2f, 0.7f, 0.2f, 0.5f)
-                "error" -> floatArrayOf(1f, 0.2f, 0.2f, 0.7f)
-                else -> floatArrayOf(0.5f, 0.5f, 0.5f, 0.5f)
+                "init" -> floatArrayOf(0.2f, 0.2f, 0.8f, 0.5f)     // blue
+                "loading" -> floatArrayOf(0.2f, 0.7f, 0.2f, 0.5f)   // green
+                "error" -> floatArrayOf(1f, 0.15f, 0.15f, 0.8f)     // red
+                else -> floatArrayOf(0.5f, 0.5f, 0.5f, 0.5f)        // gray
             }
             GLES20.glClearColor(c[0], c[1], c[2], c[3])
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -375,20 +489,18 @@ class SpineTextureView(
         }
 
         val now = System.nanoTime()
-        val dt = ((now - lastFrameNs) / 1_000_000_000f).coerceIn(0f, 0.1f)
+        val dt = ((now - lastFrameNs) / 1_000_000_000f).coerceIn(0f, MAX_DELTA)
         lastFrameNs = now
 
-        val sk = skeleton!!
-        val cam = camera!!
-        val bat = batch!!
-
         try {
-            // Animation — use classified Idle/Move lists
-            val wantType = if (targetAnimation.equals("Walk", ignoreCase = true)) AnimType.MOVE else AnimType.IDLE
-            if (wantType != currentAnimType) {
+            // ---- Animation switching ----
+            val wantType = if (targetAnimation.equals("Walk", ignoreCase = true))
+                AnimType.MOVE else AnimType.IDLE
+
+            if (wantType != currentAnimType && currentAnimType != AnimType.OTHER) {
                 val found = when (wantType) {
-                    AnimType.IDLE -> getRandomIdle()
-                    AnimType.MOVE -> getRandomMove()
+                    AnimType.IDLE -> pickRandomIdle()
+                    AnimType.MOVE -> pickRandomMove()
                     else -> null
                 }
                 if (found != null) {
@@ -396,33 +508,67 @@ class SpineTextureView(
                     currentAnimType = wantType
                 }
             }
-            animState?.update(dt); animState?.apply(sk)
 
-            // Use footOffset so character feet land at physicsY
-            sk.setPosition(physicsX, physicsY + footOffset)
-            sk.setScaleX(if (facingRight) 1f else -1f)
-            sk.updateWorldTransform()
+            // ---- Update & apply ----
+            animState?.update(dt)
+            animState?.apply(skeleton!!)
 
-            cam.update(); bat.projectionMatrix = cam.combined
-            bat.begin(); skeletonRenderer?.draw(bat, sk); bat.end()
+            // Position: footOffset aligns skeleton feet to physicsY
+            skeleton!!.setPosition(physicsX, physicsY + footOffset)
+            skeleton!!.setScaleX(if (facingRight) 1f else -1f)
+            skeleton!!.updateWorldTransform()
+
+            // ---- Draw ----
+            camera!!.update()
+            batch!!.projectionMatrix = camera!!.combined
+            batch!!.begin()
+            skeletonRenderer?.draw(batch, skeleton)
+            batch!!.end()
         } catch (e: Throwable) {
-            // Swallow frame errors
+            // Swallow per-frame errors to keep rendering
         }
     }
+
+    // ========================================================================
+    // Cleanup
+    // ========================================================================
 
     private fun cleanupGL() {
         if (cleanedUp) return
         cleanedUp = true
         running = false
+
+        // Dispose Spine/libGDX objects on GL thread
         try { batch?.dispose() } catch (_: Exception) {}
-        try {
-            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            EGL14.eglDestroySurface(eglDisplay, eglSurface)
-            EGL14.eglDestroyContext(eglDisplay, eglContext)
-            EGL14.eglTerminate(eglDisplay)
-        } catch (_: Exception) {}
-        batch = null; skeleton = null; animState = null; skeletonData = null
+        batch = null
+        skeleton = null
+        animState = null
         skeletonRenderer = null
+        // Note: skeletonData is cached externally — don't dispose it
+
+        // Tear down EGL
+        try {
+            EGL14.eglMakeCurrent(
+                eglDisplay,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_CONTEXT
+            )
+            if (eglSurface != null) {
+                EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                eglSurface = null
+            }
+            if (eglContext != null) {
+                EGL14.eglDestroyContext(eglDisplay, eglContext)
+                eglContext = null
+            }
+            if (eglDisplay != null) {
+                EGL14.eglTerminate(eglDisplay)
+                eglDisplay = null
+            }
+        } catch (_: Exception) {
+            // EGL teardown failure is non-critical
+        }
     }
 
     fun stopRendering() {
@@ -430,15 +576,48 @@ class SpineTextureView(
         surfaceReady = false
         handler?.removeCallbacksAndMessages(null)
         renderThread?.quitSafely()
-        try { renderThread?.join(3000) } catch (_: Exception) {}
+        try {
+            renderThread?.join(THREAD_JOIN_TIMEOUT_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        renderThread = null
+        handler = null
     }
+
+    // ========================================================================
+    // Logging
+    // ========================================================================
 
     private fun glLog(msg: String) {
         Log.i("SpineTex", "[${asset.characterKey}] $msg")
         try {
-            File(context.filesDir, "arkpets_gl.log").appendText(
-                "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $msg\n"
+            File(context.filesDir, LOG_FILE).appendText(
+                "${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())} $msg\n"
             )
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            // Log file write is best-effort
+        }
+    }
+
+    // ========================================================================
+    // Constants
+    // ========================================================================
+
+    companion object {
+        private const val LOG_FILE = "arkpets_gl.log"
+        private const val EGL_FRAME_RATE = 0         // 0 = uncapped
+        private const val THREAD_JOIN_TIMEOUT_MS = 3000L
+        private const val REFERENCE_HEIGHT = 1920    // Fake Gdx.graphics dimensions
+        private const val DEFAULT_DELTA = 0.016f     // ~60fps reference delta
+        private const val MAX_DELTA = 0.1f           // Clamp to avoid spiral of death
+        private const val SKELETON_SCALE = 1.5f * 0.3f // = 0.45
+        private const val VERT_BUFFER_SIZE = 32
+
+        // Classification regex patterns (matching ArkPets reference)
+        private val IDLE_REGEX = Regex(".*(?:idle|daiji|stand|stop|relax|idel|dai_ji|breath).*")
+        private val MOVE_REGEX = Regex(".*(?:move|walk|run|dush|sprint).*")
     }
 }
+
+

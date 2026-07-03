@@ -11,13 +11,14 @@ android {
         applicationId "com.arkpets.mobile"
         minSdk 24
         targetSdk 34
-        versionCode 103
-        versionName "2.3.7"
+        versionCode 137
+        versionName "2.3.41"
     }
 
     buildTypes {
         release {
             minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
